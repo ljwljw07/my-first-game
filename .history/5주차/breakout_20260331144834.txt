@@ -1,0 +1,262 @@
+import pygame
+import sys
+import time
+
+pygame.init()
+
+def get_korean_font(size):
+    candidates = ["malgungothic", "applegothic", "nanumgothic", "notosanscjk"]
+    for name in candidates:
+        font = pygame.font.SysFont(name, size)
+        if font.get_ascent() > 0:
+            return font
+    return pygame.font.SysFont(None, size)
+
+WIDTH, HEIGHT = 800, 600
+FPS = 60
+
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GRAY = (40, 40, 40)
+BLUE = (50, 120, 220)
+RED = (220, 50, 50)
+YELLOW = (240, 200, 0)
+ORANGE = (240, 140, 0)
+GREEN = (50, 200, 50)
+
+BLOCK_COLORS = [RED, ORANGE, YELLOW, GREEN, BLUE]
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Breakout - Item System")
+clock = pygame.time.Clock()
+font = get_korean_font(30)
+font_small = get_korean_font(16)
+font_big = get_korean_font(60)
+
+# 모든 레벨 공 속도 5로 고정
+LEVELS = [
+    {"rows": 3, "ball_speed": 5, "label": "Lv.1"},
+    {"rows": 5, "ball_speed": 5, "label": "Lv.2"},
+    {"rows": 7, "ball_speed": 5, "label": "Lv.3"},
+]
+
+PAD_W, PAD_H = 100, 12
+BALL_R_DEFAULT = 8
+BLOCK_W, BLOCK_H = 72, 22
+BLOCK_COLS = 10
+BLOCK_MARGIN = 5
+BLOCK_TOP = 60
+
+def make_blocks(rows):
+    blocks = []
+    for r in range(rows):
+        hp_value = 1 + (rows - 1 - r) // 2
+        for c in range(BLOCK_COLS):
+            x = BLOCK_MARGIN + c * (BLOCK_W + BLOCK_MARGIN)
+            y = BLOCK_TOP + r * (BLOCK_H + BLOCK_MARGIN)
+            color = BLOCK_COLORS[r % len(BLOCK_COLORS)]
+            blocks.append({"rect": pygame.Rect(x, y, BLOCK_W, BLOCK_H), "color": color, "hp": hp_value})
+    return blocks
+
+def item_selection_screen():
+    screen.fill(GRAY)
+    title = font_big.render("Select Your Item", True, WHITE)
+    screen.blit(title, (WIDTH//2 - title.get_width()//2, 100))
+    
+    items = [
+        "1. [Passive] Speed change by Y-axis (7 or 4)",
+        "2. [Active] Giant Ball (6s duration, 13s CD)",
+        "3. [Active] Pierce Blocks (2s duration, 18s CD)"
+    ]
+    for i, txt in enumerate(items):
+        surf = font.render(txt, True, YELLOW)
+        screen.blit(surf, (150, 250 + i * 60))
+    
+    pygame.display.flip()
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_1: return 1
+                if e.key == pygame.K_2: return 2
+                if e.key == pygame.K_3: return 3
+
+def draw_hud(score, lives, level_cfg, item_id, cooldown_timer, active_timer):
+    screen.blit(font.render(f"Score: {score}", True, WHITE), (10, 10))
+    screen.blit(font.render(f"Lives: {'♥ ' * lives}", True, RED), (WIDTH - 180, 10))
+    screen.blit(font.render(level_cfg["label"], True, YELLOW), (WIDTH // 2 - 25, 10))
+    
+    # 아이템 상태 표시 (체력 아래)
+    item_y = 50
+    now = pygame.time.get_ticks()
+    if item_id == 1:
+        txt = "[Passive] Speed Tuner Active"
+        color = GREEN
+    elif item_id == 2:
+        cd = max(0, (cooldown_timer - now) // 1000)
+        dur = max(0, (active_timer - now) // 1000)
+        txt = f"[E] Giant Mode: {dur}s (CD: {cd}s)" if dur > 0 else f"[E] Giant Ball (CD: {cd}s)"
+        color = BLUE if cd == 0 else ORANGE
+    elif item_id == 3:
+        cd = max(0, (cooldown_timer - now) // 1000)
+        dur = max(0, (active_timer - now) // 1000)
+        txt = f"[E] Piercing: {dur}s (CD: {cd}s)" if dur > 0 else f"[E] Pierce Blocks (CD: {cd}s)"
+        color = WHITE if cd == 0 else ORANGE
+        
+    screen.blit(font_small.render(txt, True, color), (WIDTH - 200, item_y))
+
+def message_screen(title, color, score):
+    screen.fill(GRAY)
+    screen.blit(font_big.render(title, True, color), (WIDTH // 2 - 180, 220))
+    screen.blit(font.render(f"Score: {score}", True, WHITE), (350, 310))
+    screen.blit(font.render("R: Restart   Q: Quit", True, WHITE), (270, 360))
+    pygame.display.flip()
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_r: return True
+                if e.key == pygame.K_q: pygame.quit(); sys.exit()
+
+def main():
+    # 아이템 선택창 먼저 띄우기
+    selected_item = item_selection_screen()
+    
+    level_idx = 0
+    level_cfg = LEVELS[level_idx]
+    pad = pygame.Rect(WIDTH // 2 - PAD_W // 2, HEIGHT - 40, PAD_W, PAD_H)
+    
+    current_ball_r = BALL_R_DEFAULT
+    ball = pygame.Rect(WIDTH // 2 - current_ball_r, HEIGHT // 2, current_ball_r * 2, current_ball_r * 2)
+    
+    bx, by = level_cfg["ball_speed"], -level_cfg["ball_speed"]
+    blocks = make_blocks(level_cfg["rows"])
+    score = 0
+    lives = 3
+    launched = False
+    cheat_seq = 0 
+    
+    # 아이템 타이머
+    cooldown_timer = 0
+    active_timer = 0
+
+    while True:
+        clock.tick(FPS)
+        now = pygame.time.get_ticks()
+
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_SPACE: launched = True
+                
+                # 액티브 아이템 사용 (E키)
+                if e.key == pygame.K_e and now > cooldown_timer:
+                    if selected_item == 2: # 자이언트
+                        active_timer = now + 6000
+                        cooldown_timer = now + 13000
+                    elif selected_item == 3: # 관통
+                        active_timer = now + 2000
+                        cooldown_timer = now + 18000
+
+                # 히든 커맨드 123
+                if e.key == pygame.K_1: cheat_seq = 1
+                elif e.key == pygame.K_2 and cheat_seq == 1: cheat_seq = 2
+                elif e.key == pygame.K_3 and cheat_seq == 2: blocks = []; cheat_seq = 0
+                else: cheat_seq = 0
+
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT] and pad.left > 0: pad.x -= 7
+        if keys[pygame.K_RIGHT] and pad.right < WIDTH: pad.x += 7
+
+        # 아이템 2: 크기 조절 로직
+        if selected_item == 2 and now < active_timer:
+            current_ball_r = int(BALL_R_DEFAULT * 1.5)
+        else:
+            current_ball_r = BALL_R_DEFAULT
+        
+        # 실제 공 사각형 크기 업데이트
+        old_center = ball.center
+        ball.size = (current_ball_r * 2, current_ball_r * 2)
+        ball.center = old_center
+
+        if not launched:
+            ball.centerx = pad.centerx
+            ball.bottom = pad.top
+            screen.fill(GRAY)
+            for b in blocks:
+                pygame.draw.rect(screen, b["color"], b["rect"])
+                hp_text = font_small.render(str(b["hp"]), True, WHITE)
+                screen.blit(hp_text, hp_text.get_rect(center=b["rect"].center))
+            pygame.draw.rect(screen, WHITE, pad)
+            pygame.draw.ellipse(screen, WHITE, ball)
+            draw_hud(score, lives, level_cfg, selected_item, cooldown_timer, active_timer)
+            pygame.display.flip()
+            if not blocks: pass 
+            else: continue
+
+        # 아이템 1: 패시브 속도 변화
+        if selected_item == 1:
+            target_speed = 7 if ball.centery < HEIGHT // 2 else 4
+            # 현재 방향 유지하며 속도만 조절
+            bx = (target_speed if bx > 0 else -target_speed)
+            by = (target_speed if by > 0 else -target_speed)
+        else:
+            # 다른 아이템일 경우 기본 속도 5 유지
+            bx = (5 if bx > 0 else -5)
+            by = (5 if by > 0 else -5)
+
+        ball.x += bx
+        ball.y += by
+
+        if ball.left <= 0 or ball.right >= WIDTH: bx = -bx
+        if ball.top <= 0: by = -by
+        if ball.colliderect(pad) and by > 0:
+            offset = (ball.centerx - pad.centerx) / (PAD_W / 2)
+            bx = int(offset * 5) or bx
+            by = -abs(by)
+
+        # 아이템 3: 관통 로직 (active_timer 동안 충돌 무시)
+        is_piercing = (selected_item == 3 and now < active_timer)
+        
+        hit_block = None
+        if not is_piercing: # 관통 중이 아닐 때만 충돌 체크
+            for b in blocks:
+                if ball.colliderect(b["rect"]):
+                    hit_block = b; break
+        
+        if hit_block:
+            hit_block["hp"] -= 1
+            if hit_block["hp"] <= 0:
+                blocks.remove(hit_block)
+                score += 10
+            by = -by
+
+        if ball.bottom >= HEIGHT:
+            lives -= 1; launched = False
+            if lives <= 0:
+                if message_screen("GAME OVER", RED, score): main()
+                return
+
+        if not blocks:
+            level_idx += 1
+            if level_idx >= len(LEVELS):
+                if message_screen("CLEAR!", YELLOW, score): main()
+                return
+            level_cfg = LEVELS[level_idx]; blocks = make_blocks(level_cfg["rows"])
+            launched = False; bx, by = 5, -5
+
+        screen.fill(GRAY)
+        for b in blocks:
+            pygame.draw.rect(screen, b["color"], b["rect"])
+            hp_txt = font_small.render(str(b["hp"]), True, WHITE)
+            screen.blit(hp_txt, hp_txt.get_rect(center=b["rect"].center))
+        
+        # 공 그리기 (관통 아이템 사용 시 색상 변경)
+        ball_color = (200, 200, 255) if is_piercing else WHITE
+        pygame.draw.ellipse(screen, ball_color, ball)
+        pygame.draw.rect(screen, WHITE, pad)
+        draw_hud(score, lives, level_cfg, selected_item, cooldown_timer, active_timer)
+        pygame.display.flip()
+
+if __name__ == "__main__":
+    main()
