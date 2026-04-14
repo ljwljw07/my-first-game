@@ -1,0 +1,105 @@
+import pygame
+import base64
+import io
+
+# SHEET_B64 데이터는 기존과 동일하게 유지
+SHEET_B64 = "iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAYAAAAeP4ixAAAAAXNSR0IArs4c6QAAAr9JREFUaIHtmc9u4jAQxoeKS/w0QSEgsSIrHoIzd648R69777kPUZVVV1oIpdoeu88RLl15D+1EE+N/sR3iVv0kpCTEP2ac4MyXGYCgYjbnAACnqoKEMThVVf3d/ukwEM+PRY3Aitmc3z9slSdPRmOrZEJMhjMjTzNuozzNuCkAn/FeDNskTKAQk+HFCJFI34wr1cxMRmPtfmxSJhJCISbDltFpIpfUeSKPzwCPz7A7lo3Du2P59l3s8l1xGuMPf94+Mr0fN3IMDO0ynqcZL2Zzvn95bYzbv7zyYjY3PgNCPYu84qBBiA8khNoEEHIyZHGoxkn/7LQckO3rtDuWcP+whfVy2ji+Xk7h+ubOmqOKAydLPHeIG/unw2AyGnMAgIQxKP/+q09KGDsLTKYuGZvVAn7c/q7PWy+nnNZcdSJ5mnG6Un3/VtTbdCZFAFUIBiaTpxk/VRVsVgsAMN8VNUy8XPhDssuoS8SXIWNhYm3Gf1idZRWLsWobR5TGyiuOWIxV734kxGR04kfaSlx6ddodS+lK5qPojVUUfuSSk/FlrDqXaxxBX+V4mKIgjwFfLxENA2fD1VjJWCLD1qC1jSO4saKajMZ1Ke/CaBPHkO6gqXE1RSiZL6EMU73lEsdQdhALNpxNNEVtkqFyraBlcayXU3P1C6A3NLZBiPcwVsBtklDF8WkNFaoTY9U7o9cmTShG702aEIy+mzQhGJ36ka8ynigKY3VJdeNH+vI0Ub5FcW0WhVo6VV4Cx6raArYMytFemS6bNDZ+RMegHJFxRQHYpMFX+ajNauHdpHFRG4a0jHc1VrpGz6mqrP0Ilu0iQ+TkaVb3WYJ2rJCTpxmnXuL65g4SxmD766exYEwYA/oCmzrMhDGxayWHiPcnfmy9tsjB/5Wv38exyJLxBiIAt1XdJpsynJogV0Mk+12dyfsP69hRnhegkw4AAAAASUVORK5CYII="
+
+class Player(pygame.sprite.Sprite):
+    def __init__(self, sheet_data):
+        super().__init__()
+        # 시트 로드 및 프레임 추출
+        sheet_bytes = base64.b64decode(sheet_data)
+        self.full_sheet = pygame.image.load(io.BytesIO(sheet_bytes)).convert_alpha()
+        
+        # 16x16 크기로 9개 프레임 추출 (4배 확대)
+        self.frames = self.extract_frames(16, 16, 3, 9)
+        
+        # 애니메이션 상태
+        self.animations = {
+            "idle": [self.frames[1]],
+            "walk": [self.frames[0], self.frames[1], self.frames[2], self.frames[1]]
+        }
+        
+        self.state = "idle"
+        self.frame_index = 0
+        self.image = self.animations[self.state][self.frame_index]
+        self.rect = self.image.get_rect(center=(240, 160))
+        
+        # 이동 관련 변수
+        self.speed = 3
+        self.frame_timer = 0
+        self.frame_delay = 150
+        self.facing_left = False # 좌우 반전 체크
+
+    def extract_frames(self, width, height, cols, total):
+        frames = []
+        for i in range(total):
+            row, col = divmod(i, cols)
+            rect = pygame.Rect(col * width, row * height, width, height)
+            img = self.full_sheet.subsurface(rect)
+            frames.append(pygame.transform.scale(img, (width * 4, height * 4)))
+        return frames
+
+    def handle_input(self):
+        keys = pygame.key.get_pressed()
+        dx, dy = 0, 0
+        
+        if keys[pygame.K_a]: dx = -self.speed; self.facing_left = True
+        if keys[pygame.K_d]: dx = self.speed; self.facing_left = False
+        if keys[pygame.K_w]: dy = -self.speed
+        if keys[pygame.K_s]: dy = self.speed
+
+        # 이동 및 상태 변경
+        if dx != 0 or dy != 0:
+            self.rect.x += dx
+            self.rect.y += dy
+            self.state = "walk"
+        else:
+            self.state = "idle"
+
+    def update(self, dt):
+        # 입력 처리
+        self.handle_input()
+        
+        # 애니메이션 갱신
+        self.frame_timer += dt
+        if self.frame_timer >= self.frame_delay:
+            self.frame_timer = 0
+            self.frame_index = (self.frame_index + 1) % len(self.animations[self.state])
+            
+            # 현재 프레임 이미지 가져오기
+            temp_image = self.animations[self.state][self.frame_index]
+            
+            # 왼쪽을 보고 있다면 이미지 반전
+            if self.facing_left:
+                self.image = pygame.transform.flip(temp_image, True, False)
+            else:
+                self.image = temp_image
+
+    def draw(self, surface):
+        surface.blit(self.image, self.rect)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 메인 루프 부분
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+pygame.init()
+screen = pygame.display.set_mode((480, 320))
+clock = pygame.time.Clock()
+player = Player(SHEET_B64)
+
+running = True
+while running:
+    dt = clock.tick(60)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    # 업데이트 및 그리기
+    player.update(dt)
+    
+    screen.fill((30, 30, 40))
+    player.draw(screen)
+    pygame.display.flip()
+
+pygame.quit()
